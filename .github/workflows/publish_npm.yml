@@ -22,8 +22,13 @@ jobs:
           npm install @types/node --no-save
       - name: Compile TypeScript
         run: |
-          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution nodenext --module nodenext --target es2022 --declaration false --lib es2023
+          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution bundler --module esnext --target es2022 --declaration false --lib es2023
           mv .github/npm/take.js .github/npm/take.mjs
+      - name: Test package with Node.js
+        run: |
+          cd .github/npm
+          echo 'import { Command, Register } from "./take.mjs"; console.log("ESM import works!");' > test.mjs
+          node test.mjs
       - name: Update package.json
         run: |
           cd .github/npm
