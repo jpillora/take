@@ -18,4 +18,4 @@ jobs:
       - name: Publish package
         run: |
           mv .github/deno/jsr.json deno.json
-          deno publish
+          deno publish --allow-dirty
