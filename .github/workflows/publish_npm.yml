@@ -16,10 +16,20 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+      - name: Compile TypeScript
+        run: |
+          npx tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution nodenext --module nodenext --target es2022 --declaration false --lib es2023
+          mv .github/npm/take.js .github/npm/take.mjs
+      - name: Update package.json
+        run: |
+          cd .github/npm
+          sed -i 's|"main": "./take.ts"|"main": "./take.mjs"|' package.json
+          sed -i 's|"exports": "./take.ts"|"exports": "./take.mjs"|' package.json
+          sed -i 's|"files": \["take.ts"\]|"files": ["take.mjs"]|' package.json
       - name: Publish package
         run: |
           npm install -g npm@latest
           VERSION=${GITHUB_REF_NAME#v}
-          mv .github/npm/package.json package.json
+          cd .github/npm
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
           npm publish --access public --provenance
