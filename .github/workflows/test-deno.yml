@@ -1,0 +1,22 @@
+name: Test Deno
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-deno:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Deno
+      uses: denoland/setup-deno@v1
+      with:
+        deno-version: v1.x
+
+    - name: Run example/dev.ts
+      run: deno run --allow-net --allow-read --allow-write --allow-env --allow-run example/dev.ts --help
