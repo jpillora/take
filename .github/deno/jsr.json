@@ -1,0 +1,7 @@
+{
+  "name": "@jpillora/take",
+  "version": "0.8.0",
+  "exports": "./../../take.ts",
+  "license": "MIT",
+  "nodeModulesDir": "auto"
+}
