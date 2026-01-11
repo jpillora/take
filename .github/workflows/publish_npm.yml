@@ -18,6 +18,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Publish package
         run: |
+          npm install -g npm@latest
           VERSION=${GITHUB_REF_NAME#v}
           mv .github/npm/package.json package.json
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
