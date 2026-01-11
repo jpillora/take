@@ -8,6 +8,18 @@ A minimal CLI library for building TypeScript-based command-line tools. Works wi
 deno add jsr:@jpillora/take
 ```
 
+### npm / Node.js
+
+```bash
+npm install @jpillora/take
+```
+
+### Bun
+
+```bash
+bun add @jpillora/take
+```
+
 ## Quick Start
 
 1. Write file `dev.ts`
