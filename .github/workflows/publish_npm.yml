@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - name: Setup Node.js
@@ -18,6 +19,4 @@ jobs:
       - name: Publish package
         run: |
           mv .github/npm/package.json package.json
-          npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          npm publish --access public --provenance
