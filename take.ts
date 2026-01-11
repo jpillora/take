@@ -369,15 +369,14 @@ export async function Register(...commands: NewCommand<any>[]) {
     // set default values
     for (const flag of flagSpecs) {
       const { name, env, initial } = flag;
-      if (!env || name in flagVals) {
+      if (name in flagVals) {
         continue;
       }
-      const val = process.env[env];
-      if (val) {
-        flagVals[name] = convert(val, typeof flag.initial);
+      if (env && process.env[env]) {
+        flagVals[name] = convert(process.env[env], typeof initial);
         continue;
       }
-      if (initial) {
+      if (initial !== undefined) {
         flagVals[name] = initial;
       }
     }

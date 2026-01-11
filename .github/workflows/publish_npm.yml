@@ -16,9 +16,13 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+      - name: Install TypeScript and types
+        run: |
+          npm install -g typescript
+          npm install @types/node --no-save
       - name: Compile TypeScript
         run: |
-          npx tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution nodenext --module nodenext --target es2022 --declaration false --lib es2023
+          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution nodenext --module nodenext --target es2022 --declaration false --lib es2023
           mv .github/npm/take.js .github/npm/take.mjs
       - name: Update package.json
         run: |
