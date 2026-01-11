@@ -1,11 +1,12 @@
 name: Publish NPM
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: read
       id-token: write
@@ -18,5 +19,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Publish package
         run: |
+          VERSION=${GITHUB_REF_NAME#v}
           mv .github/npm/package.json package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
           npm publish --access public --provenance

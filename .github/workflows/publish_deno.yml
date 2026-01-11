@@ -1,8 +1,8 @@
-name: Publish
+name: Publish JSR
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -12,10 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Setup Deno
-        uses: denoland/setup-deno@v1
+        uses: denoland/setup-deno@v2
         with:
-          deno-version: v1.x
+          deno-version: v2.x
       - name: Publish package
         run: |
+          VERSION=${GITHUB_REF_NAME#v}
           mv .github/deno/jsr.json deno.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" deno.json
           deno publish --allow-dirty
