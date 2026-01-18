@@ -22,8 +22,9 @@ jobs:
           npm install @types/node --no-save
       - name: Compile TypeScript
         run: |
-          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution bundler --module esnext --target es2022 --declaration false --lib es2023
+          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution bundler --module esnext --target es2022 --declaration --lib es2023
           mv .github/npm/take.js .github/npm/take.mjs
+          mv .github/npm/take.d.ts .github/npm/take.d.mts
       - name: Test package with Node.js
         run: |
           cd .github/npm
@@ -33,8 +34,9 @@ jobs:
         run: |
           cd .github/npm
           sed -i 's|"main": "./take.ts"|"main": "./take.mjs"|' package.json
-          sed -i 's|"exports": "./take.ts"|"exports": "./take.mjs"|' package.json
-          sed -i 's|"files": \["take.ts"\]|"files": ["take.mjs"]|' package.json
+          sed -i 's|"exports": "./take.ts"|"exports": { "import": "./take.mjs", "types": "./take.d.mts" }|' package.json
+          sed -i 's|"files": \["take.ts"\]|"files": ["take.mjs", "take.d.mts"]|' package.json
+          sed -i '/"main":/a\  "types": "./take.d.mts",' package.json
       - name: Publish package
         run: |
           npm install -g npm@latest
