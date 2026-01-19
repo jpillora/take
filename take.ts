@@ -111,6 +111,15 @@ export async function spawn(options: SpawnOptions): Promise<number> {
   });
 }
 
+// helper for running bash scripts
+export const $ = async (script: string) => {
+  await spawn({
+    program: "bash",
+    args: ["-c", script],
+    stdio: "inherit",
+  });
+};
+
 // helper for measuring time
 export const timer: () => () => string = (() => {
   const scale: [n: number, s: string][] = [
