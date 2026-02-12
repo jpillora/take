@@ -113,7 +113,7 @@ export async function spawn(options: SpawnOptions): Promise<number> {
 }
 
 // helper for running bash scripts
-export const $ = async (script: string) => {
+export const $ = async (script: string): Promise<void> => {
   await spawn({
     program: "bash",
     args: ["-c", script],
