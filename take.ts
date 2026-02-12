@@ -43,6 +43,7 @@ export type NewCommand<F extends Flags = Flags> = TakeCommand<F> & {
   // always null, but can be type-referenced
   flagValues: FlagValues<F>;
   input: CommandInput<F>;
+  flagsInitial: FlagValues<F>;
 };
 
 export type CommandInput<F extends Flags> = {
@@ -443,7 +444,10 @@ export async function Register(...commands: NewCommand<any>[]) {
 export function Command<F extends Flags>(
   command: TakeCommand<F>,
 ): NewCommand<F> {
-  return { ...command, flagValues: (null as any), input: (null as any) };
+  const flagsInitial = Object.fromEntries(
+    Object.entries(command.flags).map(([k, v]) => [k, v.initial]),
+  ) as FlagValues<F>;
+  return { ...command, flagValues: (null as any), input: (null as any), flagsInitial };
 }
 
 // deno-lint-ignore no-constant-condition
