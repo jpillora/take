@@ -1,12 +1,14 @@
-// Take is a mini-CLI library for building typescript-based command-line tools
-// Works with Deno, Node.js (with type stripping), and Bun
+// Take is a mini-CLI library for building typescript-based command-line tools.
+// Works with Deno, Node.js (with type stripping), and Bun.
+// IMPORTANT: All code must stay in 1 file.
 // deno-lint-ignore-file no-explicit-any
 
+import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import {
   spawn as nodeSpawn,
-  SpawnOptions as nodeSpawnOptions,
+  type SpawnOptions as nodeSpawnOptions,
 } from "node:child_process";
 import process from "node:process";
 
@@ -110,6 +112,108 @@ export async function spawn(options: SpawnOptions): Promise<number> {
       }
     });
   });
+}
+
+export type RunResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+  combined: string;
+  error?: string;
+  success: boolean;
+};
+
+export type ExecResult = {
+  pid: number;
+  error?: string;
+  wait: () => Promise<RunResult>;
+  kill: (signal: number) => void;
+};
+
+export function exec(options: SpawnOptions): ExecResult {
+  let code = -1;
+  let error = "";
+  const datas = {
+    out: [] as Buffer[],
+    err: [] as Buffer[],
+    combined: [] as Buffer[],
+  };
+  const result = {
+    get code() {
+      return code;
+    },
+    get stdout() {
+      return Buffer.concat(datas.out).toString();
+    },
+    get stderr() {
+      return Buffer.concat(datas.err).toString();
+    },
+    get combined() {
+      return Buffer.concat(datas.combined).toString();
+    },
+    get error() {
+      return error || undefined;
+    },
+    get success() {
+      return code === 0;
+    },
+  };
+
+  try {
+    const child = nodeSpawn(options.program, options.args ?? [], options);
+
+    child.stdout?.on("data", (data) => {
+      const buf = Buffer.from(data);
+      datas.out.push(buf);
+      datas.combined.push(buf);
+    });
+
+    child.stderr?.on("data", (data) => {
+      const buf = Buffer.from(data);
+      datas.err.push(buf);
+      datas.combined.push(buf);
+    });
+
+    let resolved = false;
+    const resultPromise = new Promise<RunResult>((resolve) => {
+      const done = (finalCode: number) => {
+        if (resolved) {
+          return;
+        }
+        code = finalCode;
+        resolved = true;
+        resolve(result);
+      };
+
+      child.on("error", (err) => {
+        error = err.message;
+        done(1);
+      });
+
+      child.on("close", (c) => {
+        done(c ?? 1);
+      });
+    });
+
+    return {
+      pid: child.pid ?? 0,
+      wait: () => resultPromise,
+      kill: (signal: number) => child.kill(signal),
+    };
+  } catch (err) {
+    code = 1;
+    error = err instanceof Error ? err.message : String(err);
+    return {
+      pid: 0,
+      error,
+      wait: () => Promise.resolve(result),
+      kill: () => {},
+    };
+  }
+}
+
+export function run(options: SpawnOptions): Promise<RunResult> {
+  return exec(options).wait();
 }
 
 // helper for running bash scripts
@@ -447,7 +551,12 @@ export function Command<F extends Flags>(
   const flagsInitial = Object.fromEntries(
     Object.entries(command.flags).map(([k, v]) => [k, v.initial]),
   ) as FlagValues<F>;
-  return { ...command, flagValues: (null as any), input: (null as any), flagsInitial };
+  return {
+    ...command,
+    flagValues: null as any,
+    input: null as any,
+    flagsInitial,
+  };
 }
 
 // deno-lint-ignore no-constant-condition

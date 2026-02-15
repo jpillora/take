@@ -16,10 +16,7 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20'
-
-    - name: Install tsx
-      run: npm install -g tsx
+        node-version: '22'
 
     - name: Run example/dev.ts
-      run: tsx example/dev.ts --help
+      run: node --experimental-strip-types example/dev.ts --help
