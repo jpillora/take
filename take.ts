@@ -4,13 +4,24 @@
 // deno-lint-ignore-file no-explicit-any
 
 import { Buffer } from "node:buffer";
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import {
   spawn as nodeSpawn,
   type SpawnOptions as nodeSpawnOptions,
 } from "node:child_process";
 import process from "node:process";
+
+let _insertHelpPath: string | null = null;
+
+export function insertHelp(path: string): void {
+  if (isAbsolute(path)) {
+    _insertHelpPath = path;
+  } else {
+    const scriptDir = dirname(process.argv[1] || ".");
+    _insertHelpPath = join(scriptDir, path);
+  }
+}
 
 export type Flag = {
   initial: number | string | boolean | Date;
@@ -281,6 +292,60 @@ async function loadEnvFile(path: string): Promise<boolean> {
   }
 }
 
+const MARKER_START = "<!-- take:start -->";
+const MARKER_END = "<!-- take:end -->";
+
+async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
+  if (!_insertHelpPath) return;
+  const path = _insertHelpPath;
+  // Build markdown list with flags as sub-bullets
+  const lines: string[] = [];
+  for (const cmd of commands) {
+    if (cmd.name === "debug") continue;
+    const desc = cmd.description ? ` - ${cmd.description}` : "";
+    lines.push(`- \`${cmd.name}\`${desc}`);
+    // Add flags as sub-bullets
+    const shorts = new Set<string>();
+    for (const [name, flag] of Object.entries(cmd.flags) as [string, Flag][]) {
+      const letter = name[0];
+      const shortStr = shorts.has(letter) ? "" : ` \`-${letter}\``;
+      shorts.add(letter);
+      const typeStr = typeof flag.initial === "boolean"
+        ? ""
+        : ` <${typeof flag.initial}>`;
+      const parts: string[] = [];
+      if (flag.env) parts.push(`env=${flag.env}`);
+      if (flag.initial) parts.push(`default=${flag.initial}`);
+      const extras = parts.length ? ` (${parts.join(" ")})` : "";
+      lines.push(
+        `  - \`--${name}\`${shortStr}${typeStr} - ${flag.description}${extras}`,
+      );
+    }
+  }
+  const content = MARKER_START + "\n" + lines.join("\n") + "\n" + MARKER_END;
+  // Read existing file
+  let fileContent: string;
+  try {
+    fileContent = await readFile(path, "utf-8");
+  } catch {
+    return; // file doesn't exist, nothing to insert into
+  }
+  // Find markers and replace or append
+  const startIdx = fileContent.indexOf(MARKER_START);
+  const endIdx = fileContent.indexOf(MARKER_END);
+  let newContent: string;
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    newContent = fileContent.substring(0, startIdx) + content +
+      fileContent.substring(endIdx + MARKER_END.length);
+  } else {
+    const sep = fileContent.endsWith("\n") ? "\n" : "\n\n";
+    newContent = fileContent + sep + content + "\n";
+  }
+  if (newContent !== fileContent) {
+    await writeFile(path, newContent, "utf-8");
+  }
+}
+
 export async function Register(...commands: NewCommand<any>[]) {
   // Load .env by default
   await loadEnvFile(".env");
@@ -326,6 +391,7 @@ export async function Register(...commands: NewCommand<any>[]) {
     }
   }
   commands.sort((a, b) => (a.name < b.name ? -1 : 1));
+  await _writeInsertHelp(commands);
   // helper for joining 2 columns of text
   type Table = { left: string; right: string }[];
   const joinColumns = (table: Table) => {
