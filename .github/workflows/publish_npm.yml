@@ -18,8 +18,8 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Install TypeScript and types
         run: |
-          npm install -g typescript
-          npm install @types/node --no-save
+          npm install -g typescript@6
+          npm install @types/node@22 --no-save
       - name: Compile TypeScript
         run: |
           tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution bundler --module esnext --target es2022 --declaration --lib es2023 --types node
