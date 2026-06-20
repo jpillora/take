@@ -203,6 +203,52 @@ Deno.test("insertHelp - no-op when file does not exist", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
+Deno.test("insertHelp - sorts flags deterministically regardless of insertion order", async () => {
+  const dir = await Deno.makeTempDir();
+  const file = join(dir, "README.md");
+  await Deno.writeTextFile(file, "# Docs\n");
+
+  // Flags declared in reverse-alphabetical insertion order; output must be sorted
+  const script = `
+    import { Command, Register, insertHelp } from "${Deno.cwd()}/take.ts";
+    insertHelp("README.md");
+    await Register(
+      Command({
+        name: "build",
+        description: "Build it",
+        flags: {
+          zebra: { initial: false, description: "z flag" },
+          mango: { initial: false, description: "m flag" },
+          alpha: { initial: false, description: "a flag" },
+        },
+        run() {},
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  await cmd.output();
+
+  const content = await Deno.readTextFile(file);
+  const idxAlpha = content.indexOf("--alpha");
+  const idxMango = content.indexOf("--mango");
+  const idxZebra = content.indexOf("--zebra");
+  assertEquals(idxAlpha > -1 && idxMango > -1 && idxZebra > -1, true);
+  assertEquals(
+    idxAlpha < idxMango && idxMango < idxZebra,
+    true,
+    "flags should be sorted alphabetically (alpha, mango, zebra)",
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
 Deno.test("insertHelp - handles absolute path", async () => {
   const dir = await Deno.makeTempDir();
   const file = join(dir, "README.md");

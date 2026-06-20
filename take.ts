@@ -304,9 +304,11 @@ async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
     if (cmd.name === "debug") continue;
     const desc = cmd.description ? ` - ${cmd.description}` : "";
     lines.push(`- \`${cmd.name}\`${desc}`);
-    // Add flags as sub-bullets
+    // Add flags as sub-bullets (sorted, matching the CLI --help output, so the
+    // generated markdown is deterministic regardless of flag insertion order)
     const shorts = new Set<string>();
-    for (const [name, flag] of Object.entries(cmd.flags) as [string, Flag][]) {
+    for (const flag of namedFlags(cmd.flags)) {
+      const { name } = flag;
       const letter = name[0];
       const shortStr = shorts.has(letter) ? "" : ` \`-${letter}\``;
       shorts.add(letter);
