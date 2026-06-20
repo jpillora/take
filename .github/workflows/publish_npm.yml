@@ -22,7 +22,7 @@ jobs:
           npm install @types/node --no-save
       - name: Compile TypeScript
         run: |
-          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution bundler --module esnext --target es2022 --declaration --lib es2023
+          tsc take.ts --outDir .github/npm --esModuleInterop --moduleResolution bundler --module esnext --target es2022 --declaration --lib es2023 --types node
           mv .github/npm/take.js .github/npm/take.mjs
           mv .github/npm/take.d.ts .github/npm/take.d.mts
       - name: Test package with Node.js
