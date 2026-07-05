@@ -108,16 +108,49 @@ function convert(val: any, type: string) {
 }
 
 // helper async node spawn
+
+/**
+ * Stdio disposition for a single stream, in Deno.Command style. Lowered onto
+ * node's stdio: "piped" → "pipe" (capturable by exec/run), "inherit" → the
+ * parent's stream, "null" → "ignore".
+ */
+export type Stdio = "inherit" | "piped" | "null";
+
 export type SpawnOptions =
-  & { program: string; args?: string[] }
+  & {
+    program: string;
+    args?: string[];
+    stdin?: Stdio;
+    stdout?: Stdio;
+    stderr?: Stdio;
+  }
   & nodeSpawnOptions;
 
-export async function spawn(options: SpawnOptions): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const child = nodeSpawn(options.program, options.args ?? [], options);
+// toNodeSpawnOptions strips take's own keys and, when any Deno-style
+// stdin/stdout/stderr is given, lowers them into node's stdio triple. When none
+// are given, node's own `stdio` (or its default piping) is left untouched, so
+// exec/run keep capturing output by default.
+function toNodeSpawnOptions(options: SpawnOptions): nodeSpawnOptions {
+  const { program: _program, args: _args, stdin, stdout, stderr, ...node } =
+    options;
+  if (stdin !== undefined || stdout !== undefined || stderr !== undefined) {
+    const lower = (s: Stdio | undefined): "inherit" | "pipe" | "ignore" =>
+      s === "inherit" ? "inherit" : s === "null" ? "ignore" : "pipe";
+    node.stdio = [lower(stdin), lower(stdout), lower(stderr)];
+  }
+  return node;
+}
+
+export async function spawn(options: SpawnOptions): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = nodeSpawn(
+      options.program,
+      options.args ?? [],
+      toNodeSpawnOptions(options),
+    );
     child.on("close", (code) => {
       if (code === 0) {
-        resolve(0);
+        resolve();
       } else {
         reject(code);
       }
@@ -171,7 +204,11 @@ export function exec(options: SpawnOptions): ExecResult {
   };
 
   try {
-    const child = nodeSpawn(options.program, options.args ?? [], options);
+    const child = nodeSpawn(
+      options.program,
+      options.args ?? [],
+      toNodeSpawnOptions(options),
+    );
 
     child.stdout?.on("data", (data) => {
       const buf = Buffer.from(data);

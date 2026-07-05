@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { join } from "node:path";
+import { exec, run, spawn } from "./take.ts";
 
 Deno.test("insertHelp - creates markers in file without them", async () => {
   const dir = await Deno.makeTempDir();
@@ -281,4 +282,100 @@ Deno.test("insertHelp - handles absolute path", async () => {
   assertEquals(content.includes("- `build` - Build it"), true);
 
   await Deno.remove(dir, { recursive: true });
+});
+
+// --- spawn / exec / run + Deno-style stdio ---
+
+Deno.test("run - stdout/stderr piped are captured", async () => {
+  const r = await run({
+    program: "bash",
+    args: ["-c", "echo out; echo err 1>&2"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  assertEquals(r.code, 0);
+  assertEquals(r.success, true);
+  assertEquals(r.stdout.trim(), "out");
+  assertEquals(r.stderr.trim(), "err");
+  assertEquals(r.combined.includes("out") && r.combined.includes("err"), true);
+});
+
+Deno.test("run - captures by default when no stdio is given", async () => {
+  const r = await run({ program: "bash", args: ["-c", "echo defaulted"] });
+  assertEquals(r.stdout.trim(), "defaulted");
+  assertEquals(r.code, 0);
+});
+
+Deno.test("run - nonzero exit is reported (not thrown)", async () => {
+  const r = await run({
+    program: "bash",
+    args: ["-c", "exit 3"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  assertEquals(r.code, 3);
+  assertEquals(r.success, false);
+});
+
+Deno.test("run - stdout=inherit is not captured, code still returned", async () => {
+  // inherit streams to this process's stdout; run captures nothing.
+  const r = await run({
+    program: "bash",
+    args: ["-c", "echo streamed; exit 4"],
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  assertEquals(r.stdout, "");
+  assertEquals(r.stderr, "");
+  assertEquals(r.code, 4);
+});
+
+Deno.test("run - stdout=null is not captured", async () => {
+  const r = await run({
+    program: "bash",
+    args: ["-c", "echo hidden 1>&2; echo hidden"],
+    stdout: "null",
+    stderr: "null",
+  });
+  assertEquals(r.stdout, "");
+  assertEquals(r.stderr, "");
+  assertEquals(r.code, 0);
+});
+
+Deno.test("exec - exposes pid and an awaitable result", async () => {
+  const e = exec({
+    program: "bash",
+    args: ["-c", "echo hi"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  assertEquals(typeof e.pid, "number");
+  const r = await e.wait();
+  assertEquals(r.stdout.trim(), "hi");
+  assertEquals(r.code, 0);
+});
+
+Deno.test("spawn - resolves (void) on success", async () => {
+  const result = await spawn({
+    program: "bash",
+    args: ["-c", "exit 0"],
+    stdout: "null",
+    stderr: "null",
+  });
+  assertEquals(result, undefined);
+});
+
+Deno.test("spawn - rejects with the exit code on failure", async () => {
+  let rejected: unknown = "not-rejected";
+  try {
+    await spawn({
+      program: "bash",
+      args: ["-c", "exit 7"],
+      stdout: "null",
+      stderr: "null",
+    });
+  } catch (code) {
+    rejected = code;
+  }
+  assertEquals(rejected, 7);
 });
