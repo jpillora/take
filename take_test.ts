@@ -284,6 +284,86 @@ Deno.test("insertHelp - handles absolute path", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
+// --- hidden commands ---
+
+Deno.test("hidden - excluded from root-level help listing", async () => {
+  const dir = await Deno.makeTempDir();
+
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "build",
+        description: "Build the project",
+        flags: {},
+        run() {},
+      }),
+      Command({
+        name: "secret",
+        description: "A hidden maintenance command",
+        hidden: true,
+        flags: {},
+        run() {},
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { stdout } = await cmd.output();
+  const out = new TextDecoder().decode(stdout);
+
+  assertEquals(out.includes("build"), true, "visible command should be listed");
+  assertEquals(
+    out.includes("secret"),
+    false,
+    "hidden command should not appear in root-level help",
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("hidden - still shown via explicit <command> --help", async () => {
+  const dir = await Deno.makeTempDir();
+
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "secret",
+        description: "A hidden maintenance command",
+        hidden: true,
+        flags: {},
+        run() {},
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "secret", "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { stdout } = await cmd.output();
+  const out = new TextDecoder().decode(stdout);
+
+  assertEquals(out.includes("secret"), true, "explicit help should name the command");
+  assertEquals(
+    out.includes("A hidden maintenance command"),
+    true,
+    "explicit help should show the description",
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
 // --- spawn / exec / run + Deno-style stdio ---
 
 Deno.test("run - stdout/stderr piped are captured", async () => {

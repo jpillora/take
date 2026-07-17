@@ -44,6 +44,9 @@ export type TakeCommand<F extends Flags = Flags> = {
   names?: string[];
   description: string;
   help?: string;
+  // hidden commands are omitted from the top-level help listing (and generated
+  // markdown), but can still be run and shown via an explicit `<command> --help`.
+  hidden?: boolean;
   flags: F;
   run: (input: CommandInput<F>) => void | Promise<void>;
 };
@@ -338,7 +341,7 @@ async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
   // Build markdown list with flags as sub-bullets
   const lines: string[] = [];
   for (const cmd of commands) {
-    if (cmd.name === "debug") continue;
+    if (cmd.name === "debug" || cmd.hidden) continue;
     const desc = cmd.description ? ` - ${cmd.description}` : "";
     lines.push(`- \`${cmd.name}\`${desc}`);
     // Add flags as sub-bullets (sorted, matching the CLI --help output, so the
@@ -448,6 +451,7 @@ export async function Register(...commands: NewCommand<any>[]) {
     // build command list
     const content = joinColumns(
       commands.filter((cmd) => {
+        if (cmd.hidden) return false;
         return cmd.name !== "debug" || process.env.DEBUG === "1";
       }).map((cmd) => ({
         left: ` • ${cmd.name}`,
