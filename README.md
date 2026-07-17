@@ -194,6 +194,60 @@ Examples:
 });
 ```
 
+### Hidden Commands
+
+Set `hidden: true` to omit a command from the top-level `--help` listing (and
+from any generated `insertHelp` markdown). The command still runs, and its own
+help is still available via an explicit `<command> --help`. Useful for internal
+or maintenance commands you don't want to advertise.
+
+```typescript
+await Register(
+  Command({
+    name: "build",
+    description: "Build the project",
+    flags: {},
+    run() {
+      console.log("Building...");
+    },
+  }),
+  Command({
+    name: "internal",
+    description: "Internal maintenance task",
+    hidden: true,
+    flags: {},
+    run() {
+      console.log("Running internal task...");
+    },
+  })
+);
+```
+
+```bash
+# hidden from the top-level listing:
+$ ./dev.ts --help
+
+dev.ts <command> --help
+
+commands:
+ • build - Build the project
+
+# ...but still runnable:
+$ ./dev.ts internal
+Running internal task...
+
+# ...and its own help still works:
+$ ./dev.ts internal --help
+
+dev.ts internal <flags>
+
+description:
+Internal maintenance task
+
+flags:
+ --help, -h  show help
+```
+
 ### Positional Arguments
 
 Non-flag arguments are available in `args`.
