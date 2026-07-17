@@ -14,6 +14,15 @@ import process from "node:process";
 
 let _insertHelpPath: string | null = null;
 
+/**
+ * Register a markdown file to receive an auto-generated command reference.
+ *
+ * On the next {@link Register} call, the command list (and each command's
+ * flags) is rendered between `<!-- take:start -->` and `<!-- take:end -->`
+ * markers in the file. A relative `path` resolves against the running script's
+ * directory; an absolute path is used as-is. If the file or its markers are
+ * missing, nothing is written.
+ */
 export function insertHelp(path: string): void {
   if (isAbsolute(path)) {
     _insertHelpPath = path;
@@ -23,14 +32,26 @@ export function insertHelp(path: string): void {
   }
 }
 
+/**
+ * A single command-line flag definition. The type of {@link Flag.initial}
+ * determines both the parsed value type and how the flag renders in help.
+ */
 export type Flag = {
+  /** Default value; its type (number, string, boolean, or Date) is the flag type. */
   initial: number | string | boolean | Date;
+  /** One-line description shown in `--help` output. */
   description: string;
+  /** Optional env var name used as a fallback when the flag is not passed. */
   env?: string;
 };
 
 type Flags = Record<string, Flag>;
 
+/**
+ * Maps a set of {@link Flag} definitions to the runtime values passed to a
+ * command's `run` — each flag becomes a property typed by its `initial` value
+ * (number, string, boolean, or Date).
+ */
 export type FlagValues<T extends Flags> = {
   [P in keyof T]: T[P]["initial"] extends number ? number
     : T[P]["initial"] extends string ? string
@@ -39,37 +60,72 @@ export type FlagValues<T extends Flags> = {
     : never;
 };
 
+/**
+ * A command definition passed to {@link Command}. `F` captures the flag shape
+ * so `run` receives strongly-typed flag values.
+ */
 export type TakeCommand<F extends Flags = Flags> = {
+  /** Command name; whitespace-separated for sub-commands, e.g. `"db migrate"`. */
   name: string;
+  /** Internal: `name` split into its sub-command parts (populated by Register). */
   names?: string[];
+  /** One-line description shown in help listings. */
   description: string;
+  /** Optional long-form help shown under this command's own `--help`. */
   help?: string;
-  // hidden commands are omitted from the top-level help listing (and generated
-  // markdown), but can still be run and shown via an explicit `<command> --help`.
+  /**
+   * When true, the command is omitted from the top-level help listing and from
+   * the {@link insertHelp} markdown, but stays fully runnable and still shows
+   * its own help via an explicit `<command> --help`. Use for internal or
+   * maintenance commands you don't want to advertise.
+   */
   hidden?: boolean;
+  /** Flag definitions for this command; use `{}` for none. */
   flags: F;
+  /** Handler run when the command is invoked, given parsed flags and args. */
   run: (input: CommandInput<F>) => void | Promise<void>;
 };
 
+/**
+ * Identity helper that captures a flags object's literal type for reuse across
+ * commands while keeping each flag's value type inferred.
+ */
 export function newFlags<F extends Flags>(flags: F): F {
   return flags;
 }
 
+/**
+ * A {@link TakeCommand} augmented by {@link Command} with type-only helper
+ * fields. `flagValues` and `input` are always null at runtime — they exist so
+ * their types can be referenced (e.g. `typeof cmd.input`).
+ */
 export type NewCommand<F extends Flags = Flags> = TakeCommand<F> & {
-  // always null, but can be type-referenced
+  /** Type-only handle to the parsed flag values shape. Always null at runtime. */
   flagValues: FlagValues<F>;
+  /** Type-only handle to the full `run` input shape. Always null at runtime. */
   input: CommandInput<F>;
+  /** The flags' initial/default values, keyed by flag name. */
   flagsInitial: FlagValues<F>;
 };
 
+/** The argument object passed to a command's `run` function. */
 export type CommandInput<F extends Flags> = {
+  /** Parsed flag values, typed from the command's flag definitions. */
   flags: FlagValues<F>;
+  /** Positional arguments remaining after flags are parsed. */
   args: string[];
+  /** Invoke another command in the same CLI by name, e.g. `await cmd("build")`. */
   cmd: (...args: string[]) => Promise<void>;
+  /** The resolved name of the running command. */
   cmdName: string;
+  /** Print this command's help (with an optional error message) and exit. */
   help: (msg?: string) => void;
 };
 
+/**
+ * Abort a command's `run` with a help/usage error. The thrown string is caught
+ * by the runner and shown as that command's help error message.
+ */
 export function help(str: string) {
   throw str;
 }
@@ -119,12 +175,22 @@ function convert(val: any, type: string) {
  */
 export type Stdio = "inherit" | "piped" | "null";
 
+/**
+ * Options for {@link spawn}, {@link exec}, and {@link run}. Extends node's
+ * child_process `SpawnOptions`, adding a required `program` plus Deno-style
+ * `stdin`/`stdout`/`stderr` dispositions (see {@link Stdio}).
+ */
 export type SpawnOptions =
   & {
+    /** The program/executable to run. */
     program: string;
+    /** Arguments passed to the program. */
     args?: string[];
+    /** Disposition for the child's stdin (see {@link Stdio}). */
     stdin?: Stdio;
+    /** Disposition for the child's stdout (see {@link Stdio}). */
     stdout?: Stdio;
+    /** Disposition for the child's stderr (see {@link Stdio}). */
     stderr?: Stdio;
   }
   & nodeSpawnOptions;
@@ -144,6 +210,11 @@ function toNodeSpawnOptions(options: SpawnOptions): nodeSpawnOptions {
   return node;
 }
 
+/**
+ * Run a program to completion. Resolves when the child exits with code 0, and
+ * rejects with the non-zero exit code otherwise. Control output capture via the
+ * `stdin`/`stdout`/`stderr` options (see {@link Stdio}).
+ */
 export async function spawn(options: SpawnOptions): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = nodeSpawn(
@@ -161,22 +232,39 @@ export async function spawn(options: SpawnOptions): Promise<void> {
   });
 }
 
+/** The outcome of a finished child process from {@link run} or {@link exec}. */
 export type RunResult = {
+  /** Process exit code (or 1 if it failed to start). */
   code: number;
+  /** Captured standard output (empty unless stdout was piped). */
   stdout: string;
+  /** Captured standard error (empty unless stderr was piped). */
   stderr: string;
+  /** Captured stdout and stderr interleaved in arrival order. */
   combined: string;
+  /** Spawn error message, if the process failed to start. */
   error?: string;
+  /** True when `code` is 0. */
   success: boolean;
 };
 
+/** Handle to a running child process returned by {@link exec}. */
 export type ExecResult = {
+  /** OS process id (0 if the process failed to start). */
   pid: number;
+  /** Spawn error message, if the process failed to start. */
   error?: string;
+  /** Await the process and resolve with its {@link RunResult}. */
   wait: () => Promise<RunResult>;
+  /** Send a signal to the process to terminate it. */
   kill: (signal: number) => void;
 };
 
+/**
+ * Start a program and return an {@link ExecResult} handle immediately, exposing
+ * its `pid`, a `kill` method, and `wait()` for the final {@link RunResult}.
+ * Output is captured by default; use for long-running or concurrent processes.
+ */
 export function exec(options: SpawnOptions): ExecResult {
   let code = -1;
   let error = "";
@@ -263,11 +351,19 @@ export function exec(options: SpawnOptions): ExecResult {
   }
 }
 
+/**
+ * Run a program to completion and resolve with its {@link RunResult}. Unlike
+ * {@link spawn}, a non-zero exit is reported in `result.code` rather than
+ * thrown. Shorthand for `exec(options).wait()`.
+ */
 export function run(options: SpawnOptions): Promise<RunResult> {
   return exec(options).wait();
 }
 
-// helper for running bash scripts
+/**
+ * Run a bash script with inherited stdio, e.g. `await $("ls -la | wc -l")`.
+ * Rejects if the script exits non-zero.
+ */
 export const $ = async (script: string): Promise<void> => {
   await spawn({
     program: "bash",
@@ -276,7 +372,12 @@ export const $ = async (script: string): Promise<void> => {
   });
 };
 
-// helper for measuring time
+/**
+ * Start a timer and return a `stop` function that yields the elapsed time as a
+ * human-readable string (e.g. `"1.50sec"`). The returned function also
+ * stringifies to that value, so it drops straight into a template literal:
+ * `const t = timer(); ...; console.log(\`done in ${t}\`)`.
+ */
 export const timer: () => () => string = (() => {
   const scale: [n: number, s: string][] = [
     [1000, "ms"],
@@ -388,6 +489,12 @@ async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
   }
 }
 
+/**
+ * Build the CLI from a set of {@link Command} definitions and run the one named
+ * by `process.argv`. Loads a local `.env`, validates commands, generates
+ * `--help`, updates any {@link insertHelp} target, then dispatches. Exits the
+ * process on help, validation errors, or a command failure.
+ */
 export async function Register(...commands: NewCommand<any>[]) {
   // Load .env by default
   await loadEnvFile(".env");
@@ -654,6 +761,11 @@ export async function Register(...commands: NewCommand<any>[]) {
   }
 }
 
+/**
+ * Define a single CLI command. Wraps a {@link TakeCommand} and returns a
+ * {@link NewCommand} with inferred flag-value types, ready to pass to
+ * {@link Register}.
+ */
 export function Command<F extends Flags>(
   command: TakeCommand<F>,
 ): NewCommand<F> {
