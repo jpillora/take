@@ -131,7 +131,7 @@ export function help(str: string) {
 }
 
 const exit = (...args: any[]) => {
-  console.log(...args);
+  console.error(...args);
   process.exit(1);
 };
 
@@ -566,12 +566,12 @@ export async function Register(...commands: NewCommand<any>[]) {
       })),
     );
     // print result
-    console.log(
+    console.error(
       `\n${scriptName} <command> --help\n\n` + "commands:\n" + content + "\n",
     );
     if (msg) {
-      console.log("ERROR:", msg);
-      console.log("");
+      console.error("ERROR:", msg);
+      console.error("");
     }
     process.exit(msg ? 1 : 0);
   }
@@ -601,7 +601,7 @@ export async function Register(...commands: NewCommand<any>[]) {
       })),
     );
     // print result
-    console.log(
+    console.error(
       `\n${scriptName} ` +
         cmd.name +
         " <flags>\n\n" +
@@ -614,8 +614,8 @@ export async function Register(...commands: NewCommand<any>[]) {
         "\n",
     );
     if (msg) {
-      console.log("ERROR:", msg);
-      console.log("");
+      console.error("ERROR:", msg);
+      console.error("");
     }
     process.exit(0);
   }
@@ -726,7 +726,7 @@ export async function Register(...commands: NewCommand<any>[]) {
       }
       throw err;
     }
-    console.log(`${scriptName} "${match.name}" ran in ${t}`);
+    console.error(`${scriptName} "${match.name}" ran in ${t}`);
   }
   // "root" command
   // process.argv: [node, script, ...args]
@@ -754,7 +754,7 @@ export async function Register(...commands: NewCommand<any>[]) {
       if (/exit with (\d+)/.test(msg)) {
         process.exit(parseInt(RegExp.$1, 10));
       }
-      console.log("ERROR: " + msg + "\n");
+      console.error("ERROR: " + msg + "\n");
     }
     // caught error -> exit 1
     process.exit(1);

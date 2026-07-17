@@ -315,8 +315,9 @@ Deno.test("hidden - excluded from root-level help listing", async () => {
     stdout: "piped",
     stderr: "piped",
   });
-  const { stdout } = await cmd.output();
-  const out = new TextDecoder().decode(stdout);
+  // take writes its own output (help, timings, errors) to stderr
+  const { stderr } = await cmd.output();
+  const out = new TextDecoder().decode(stderr);
 
   assertEquals(out.includes("build"), true, "visible command should be listed");
   assertEquals(
@@ -351,8 +352,9 @@ Deno.test("hidden - still shown via explicit <command> --help", async () => {
     stdout: "piped",
     stderr: "piped",
   });
-  const { stdout } = await cmd.output();
-  const out = new TextDecoder().decode(stdout);
+  // take writes its own output (help, timings, errors) to stderr
+  const { stderr } = await cmd.output();
+  const out = new TextDecoder().decode(stderr);
 
   assertEquals(out.includes("secret"), true, "explicit help should name the command");
   assertEquals(
@@ -360,6 +362,116 @@ Deno.test("hidden - still shown via explicit <command> --help", async () => {
     true,
     "explicit help should show the description",
   );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+// --- output streams: take's own output goes to stderr ---
+
+Deno.test("output - take diagnostics go to stderr, command owns stdout", async () => {
+  const dir = await Deno.makeTempDir();
+
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "emit",
+        description: "Write to stdout",
+        flags: {},
+        run() {
+          console.log("COMMAND_OUTPUT");
+        },
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "emit"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { stdout, stderr } = await cmd.output();
+  const out = new TextDecoder().decode(stdout);
+  const err = new TextDecoder().decode(stderr);
+
+  // The command's own output stays on stdout, uncontaminated...
+  assertEquals(out.includes("COMMAND_OUTPUT"), true);
+  assertEquals(out.includes("ran in"), false, "timing must not be on stdout");
+  // ...while take's timing line lands on stderr.
+  assertEquals(err.includes("ran in"), true, "timing must be on stderr");
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("output - help is written to stderr, stdout stays empty", async () => {
+  const dir = await Deno.makeTempDir();
+
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "build",
+        description: "Build the project",
+        flags: {},
+        run() {},
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { stdout, stderr } = await cmd.output();
+  const out = new TextDecoder().decode(stdout);
+  const err = new TextDecoder().decode(stderr);
+
+  assertEquals(out, "", "stdout should be empty for --help");
+  assertEquals(
+    err.includes("build - Build the project"),
+    true,
+    "help should be written to stderr",
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("output - errors are written to stderr, stdout stays empty", async () => {
+  const dir = await Deno.makeTempDir();
+
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "boom",
+        description: "Throws an error",
+        flags: {},
+        run() {
+          throw new Error("kaboom");
+        },
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "boom"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  const out = new TextDecoder().decode(stdout);
+  const err = new TextDecoder().decode(stderr);
+
+  assertEquals(code, 1);
+  assertEquals(out, "", "stdout should be empty on error");
+  assertEquals(err.includes("kaboom"), true, "error should be written to stderr");
 
   await Deno.remove(dir, { recursive: true });
 });

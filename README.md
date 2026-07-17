@@ -58,6 +58,18 @@ bun add @jpillora/take
     Hello, world!
     ```
 
+## Output Streams
+
+`take` writes all of its own output — help text, command timings, and
+validation/runtime errors — to **stderr**. Your command's `run` function owns
+**stdout**, so piping a command's real output stays clean and free of take's
+diagnostics:
+
+```bash
+$ ./dev.ts export > data.json   # only your command's stdout lands in the file;
+                                # take's timing line still shows on the terminal
+```
+
 ## Examples
 
 ### String Flag
