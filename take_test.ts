@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
 import { exec, run, spawn } from "./take.ts";
 
 Deno.test("insertHelp - creates markers in file without them", async () => {
@@ -280,6 +281,211 @@ Deno.test("insertHelp - handles absolute path", async () => {
 
   const content = await Deno.readTextFile(file);
   assertEquals(content.includes("- `build` - Build it"), true);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("insertHelp - flags false generates only visible commands", async () => {
+  const dir = await Deno.makeTempDir();
+  const file = join(dir, "README.md");
+  await Deno.writeTextFile(file, "# Docs\n");
+
+  const script = `
+    import { Command, Register, insertHelp } from "${Deno.cwd()}/take.ts";
+    insertHelp("README.md", { flags: false });
+    await Register(
+      Command({
+        name: "build",
+        description: "Build the project",
+        flags: {
+          dryRun: { initial: false, description: "Preview the build" },
+        },
+        run() {},
+      }),
+      Command({
+        name: "secret",
+        description: "Hidden maintenance",
+        hidden: true,
+        flags: {},
+        run() {},
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const cmd = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  await cmd.output();
+
+  const content = await Deno.readTextFile(file);
+  assertEquals(content.includes("- `build` - Build the project"), true);
+  assertEquals(content.includes("secret"), false);
+  assertEquals(content.includes("--dry-run"), false);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+// --- flag case ---
+
+Deno.test("flags - camelCase keys use flag-case on the command line", async () => {
+  const dir = await Deno.makeTempDir();
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "build",
+        description: "Build the project",
+        flags: {
+          fooBar: { initial: false, description: "Enable foo bar" },
+          outputDir: { initial: "dist", description: "Output directory" },
+        },
+        run({ flags }) {
+          console.log(JSON.stringify({
+            fooBar: flags.fooBar,
+            outputDir: flags.outputDir,
+          }));
+        },
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+
+  const runCommand = new Deno.Command("deno", {
+    args: [
+      "run",
+      "--allow-all",
+      scriptFile,
+      "build",
+      "--foo-bar",
+      "--output-dir",
+      "custom",
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const result = await runCommand.output();
+  assertEquals(result.code, 0);
+  assertEquals(
+    new TextDecoder().decode(result.stdout).trim(),
+    JSON.stringify({ fooBar: true, outputDir: "custom" }),
+  );
+
+  const helpCommand = new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "build", "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const helpResult = await helpCommand.output();
+  const helpOutput = new TextDecoder().decode(helpResult.stderr);
+  assertEquals(helpOutput.includes("--foo-bar"), true);
+  assertEquals(helpOutput.includes("--fooBar"), false);
+  assertEquals(helpOutput.includes("--output-dir"), true);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+// --- usage history ---
+
+Deno.test("usage - dev.ts appends privacy-safe JSONL records", async () => {
+  const dir = await Deno.makeTempDir();
+  const home = join(dir, "home");
+  const scriptFile = join(dir, "dev.ts");
+  const script = `
+    import { Command, Register, logCommandUsage } from "${Deno.cwd()}/take.ts";
+    logCommandUsage();
+    await Register(
+      Command({
+        name: "foo bar",
+        description: "Test usage history",
+        flags: {
+          fooBar: { initial: false, description: "Enable foo bar" },
+        },
+        run() {},
+      }),
+    );
+  `;
+  await Deno.writeTextFile(scriptFile, script);
+
+  const invoke = (args: string[]) =>
+    new Deno.Command("deno", {
+      args: [
+        "run",
+        "--allow-all",
+        scriptFile,
+        "foo",
+        "bar",
+        "--foo-bar",
+        ...args,
+      ],
+      env: { HOME: home },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+  const first = await invoke(["first-secret", "second-secret", "third-secret"]);
+  const second = await invoke(["fourth-secret"]);
+  assertEquals(first.code, 0);
+  assertEquals(second.code, 0);
+
+  const hash = createHash("sha256").update(resolve(scriptFile)).digest("hex");
+  const logFile = join(home, ".local", "state", "take", `${hash}.jsonl`);
+  const content = await Deno.readTextFile(logFile);
+  const lines = content.trimEnd().split("\n");
+  assertEquals(lines.length, 2, "each invocation should append one record");
+
+  const { timestamp, ...record } = JSON.parse(lines[0]);
+  assertEquals(record, {
+    command: "foo bar",
+    flags: { fooBar: true },
+    argCount: 3,
+  });
+  assertEquals(typeof timestamp, "string");
+  assertEquals(Number.isNaN(Date.parse(timestamp)), false);
+  assertEquals(content.includes("first-secret"), false);
+  assertEquals(content.includes("second-secret"), false);
+  assertEquals(content.includes("third-secret"), false);
+  assertEquals(content.includes("fourth-secret"), false);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("usage - command logging is disabled by default", async () => {
+  const dir = await Deno.makeTempDir();
+  const home = join(dir, "home");
+  const scriptFile = join(dir, "dev.ts");
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "build",
+        description: "Build the project",
+        flags: {},
+        run() {},
+      }),
+    );
+  `;
+  await Deno.writeTextFile(scriptFile, script);
+
+  const result = await new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "build"],
+    env: { HOME: home },
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  assertEquals(result.code, 0);
+
+  let stateDirExists = true;
+  try {
+    await Deno.stat(join(home, ".local", "state", "take"));
+  } catch {
+    stateDirExists = false;
+  }
+  assertEquals(stateDirExists, false);
 
   await Deno.remove(dir, { recursive: true });
 });

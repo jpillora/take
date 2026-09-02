@@ -147,6 +147,11 @@ Command({
 $ ./dev.ts build --minify
 ```
 
+Flag keys are written naturally in TypeScript and converted to flag-case on the
+command line. The key remains unchanged in the handler, so `fooBar` is invoked
+as `--foo-bar` and read as `flags.fooBar`. Initialisms are handled too, for
+example `HTTPServer` becomes `--http-server`.
+
 ### Environment Variable Fallback
 
 Flags can read from environment variables when not provided on the command line.
@@ -260,6 +265,25 @@ flags:
  --help, -h  show help
 ```
 
+### Generated Command Reference
+
+`insertHelp` writes the visible commands and their flags between
+`<!-- take:start -->` and `<!-- take:end -->` markers in a markdown file:
+
+```typescript
+import { insertHelp } from "@jpillora/take";
+
+insertHelp("README.md");
+```
+
+To generate only the command list, omit the per-command flag entries:
+
+```typescript
+insertHelp("README.md", { flags: false });
+```
+
+Hidden commands are excluded in both modes.
+
 ### Positional Arguments
 
 Non-flag arguments are available in `args`.
@@ -345,6 +369,35 @@ Command({
   },
 });
 ```
+
+### Usage History
+
+Command usage logging is disabled by default. Enable it once in your entrypoint:
+
+```typescript
+import { logCommandUsage } from "@jpillora/take";
+
+logCommandUsage();
+```
+
+When enabled, take appends one JSONL record for each top-level command
+invocation to:
+
+```text
+$HOME/.local/state/take/<sha256-of-absolute-entrypoint-path>.jsonl
+```
+
+Each record contains the resolved command name, resolved flag values, the
+number of positional arguments, and an ISO timestamp:
+
+```json
+{"command":"foo bar","flags":{"fooBar":true},"argCount":3,"timestamp":"2026-09-02T01:23:45.678Z"}
+```
+
+Positional argument contents are never stored. Flag values are stored, so pass
+sensitive values as positional arguments if they should not appear in history.
+History is best-effort: an unavailable or unwritable state directory never
+prevents the command from running.
 
 ### Timer Utility
 
