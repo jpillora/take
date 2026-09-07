@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { exec, run, spawn } from "./take.ts";
+import { Command, exec, Group, run, spawn } from "./take.ts";
 
 Deno.test("insertHelp - creates markers in file without them", async () => {
   const dir = await Deno.makeTempDir();
@@ -327,6 +327,376 @@ Deno.test("insertHelp - flags false generates only visible commands", async () =
   assertEquals(content.includes("--dry-run"), false);
 
   await Deno.remove(dir, { recursive: true });
+});
+
+// --- groups ---
+
+Deno.test("groups - explicit groups scope help and dispatch nested commands", async () => {
+  const dir = await Deno.makeTempDir();
+  const script = `
+    import { Command, Group, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Group(
+        {
+          name: "tools",
+          description: "Tool commands",
+        },
+        Command({
+          name: "build",
+          description: "Build the project",
+          flags: {},
+          run({ cmdName }) { console.log(cmdName); },
+        }),
+        Group("nested", Command({
+          name: "run",
+          description: "Run the nested tool",
+          flags: {},
+          run({ cmdName }) { console.log(cmdName); },
+        })),
+      ),
+      Command({
+        name: "plain",
+        description: "A root command",
+        flags: {},
+        run() {},
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+  const invoke = (args: string[]) =>
+    new Deno.Command("deno", {
+      args: ["run", "--allow-all", scriptFile, ...args],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+  const rootHelp = await invoke(["--help"]);
+  const rootOutput = new TextDecoder().decode(rootHelp.stderr);
+  assertEquals(rootHelp.code, 0);
+  assertEquals(rootOutput.includes(" • tools - Tool commands"), true);
+  assertEquals(rootOutput.includes(" • plain - A root command"), true);
+  assertEquals(rootOutput.includes(" • build"), false);
+
+  const groupHelp = await invoke(["tools", "--help"]);
+  const groupOutput = new TextDecoder().decode(groupHelp.stderr);
+  assertEquals(groupHelp.code, 0);
+  assertEquals(groupOutput.includes("tools <command> --help"), true);
+  assertEquals(groupOutput.includes("Tool commands"), false);
+  assertEquals(groupOutput.includes(" • build"), true);
+  assertEquals(groupOutput.includes("- Build the project"), true);
+  assertEquals(groupOutput.includes(" • nested"), true);
+  assertEquals(groupOutput.includes("   • run"), true);
+  assertEquals(groupOutput.includes("- Run the nested tool"), true);
+  assertEquals(groupOutput.includes(" • plain"), false);
+
+  const implicitHelp = await invoke(["tools", "nested"]);
+  const implicitOutput = new TextDecoder().decode(implicitHelp.stderr);
+  assertEquals(implicitHelp.code, 0);
+  assertEquals(implicitOutput.includes("tools nested <command> --help"), true);
+  assertEquals(implicitOutput.includes(" • run - Run the nested tool"), true);
+
+  const command = await invoke(["tools", "nested", "run"]);
+  assertEquals(command.code, 0);
+  assertEquals(
+    new TextDecoder().decode(command.stdout).trim(),
+    "tools nested run",
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("groups - spaced commands create and merge automatic groups", async () => {
+  const dir = await Deno.makeTempDir();
+  const script = `
+    import { Command, Group, Register } from "${Deno.cwd()}/take.ts";
+    const migrate = Command({
+      name: "  db   migrate  ",
+      description: "Run migrations",
+      flags: {},
+      run({ cmdName }) { console.log("PATH=" + cmdName); },
+    });
+    await Register(
+      migrate,
+      Command({
+        name: "db seed run",
+        description: "Seed the database",
+        flags: {},
+        run({ cmdName }) { console.log("PATH=" + cmdName); },
+      }),
+      Group({ name: "db", description: "Database commands" }, Command({
+        name: "status",
+        description: "Show database status",
+        flags: {},
+        run({ cmdName }) { console.log("PATH=" + cmdName); },
+      })),
+    );
+    console.log("NAME=" + migrate.name);
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+  const invoke = (args: string[]) =>
+    new Deno.Command("deno", {
+      args: ["run", "--allow-all", scriptFile, ...args],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+  const rootHelp = await invoke(["--help"]);
+  const rootOutput = new TextDecoder().decode(rootHelp.stderr);
+  assertEquals(rootOutput.includes(" • db - Database commands"), true);
+  assertEquals(rootOutput.includes("db migrate"), false);
+
+  const groupHelp = await invoke(["db", "--help"]);
+  const groupOutput = new TextDecoder().decode(groupHelp.stderr);
+  assertEquals(groupOutput.includes(" • migrate - Run migrations"), true);
+  assertEquals(groupOutput.includes(" • seed"), true);
+  assertEquals(groupOutput.includes("   • run"), true);
+  assertEquals(groupOutput.includes("- Seed the database"), true);
+  assertEquals(groupOutput.includes(" • status"), true);
+  assertEquals(groupOutput.includes("- Show database status"), true);
+
+  const migrateRun = await invoke(["db", "migrate"]);
+  assertEquals(migrateRun.code, 0);
+  const migrateOutput = new TextDecoder().decode(migrateRun.stdout);
+  assertEquals(migrateOutput.includes("PATH=db migrate"), true);
+  assertEquals(migrateOutput.includes("NAME=  db   migrate  "), true);
+
+  const seedRun = await invoke(["db", "seed", "run"]);
+  assertEquals(seedRun.code, 0);
+  assertEquals(
+    new TextDecoder().decode(seedRun.stdout).includes("PATH=db seed run"),
+    true,
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("groups - programmatic cmd supports split and full nested names", async () => {
+  const dir = await Deno.makeTempDir();
+  const script = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "all",
+        description: "Run all commands",
+        flags: {},
+        async run({ cmd }) {
+          await cmd("foo bar");
+          await cmd("foo", "baz");
+        },
+      }),
+      Command({
+        name: "foo bar",
+        description: "Run bar",
+        flags: {},
+        run({ cmdName }) { console.log(cmdName); },
+      }),
+      Command({
+        name: "foo baz",
+        description: "Run baz",
+        flags: {},
+        run({ cmdName }) { console.log(cmdName); },
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+  const result = await new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "all"],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+
+  assertEquals(result.code, 0);
+  assertEquals(
+    new TextDecoder().decode(result.stdout).trim().split("\n"),
+    ["foo bar", "foo baz"],
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("groups - hidden groups and hidden-only automatic groups stay runnable", async () => {
+  const dir = await Deno.makeTempDir();
+  const script = `
+    import { Command, Group, Register } from "${Deno.cwd()}/take.ts";
+    await Register(
+      Command({
+        name: "visible",
+        description: "Visible command",
+        flags: {},
+        run() {},
+      }),
+      Group({ name: "secret", hidden: true }, Command({
+        name: "wipe",
+        description: "Wipe data",
+        flags: {},
+        run({ cmdName }) { console.log(cmdName); },
+      })),
+      Command({
+        name: "internal clean",
+        description: "Clean internals",
+        hidden: true,
+        flags: {},
+        run({ cmdName }) { console.log(cmdName); },
+      }),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+  const invoke = (args: string[]) =>
+    new Deno.Command("deno", {
+      args: ["run", "--allow-all", scriptFile, ...args],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+  const rootHelp = await invoke(["--help"]);
+  const rootOutput = new TextDecoder().decode(rootHelp.stderr);
+  assertEquals(rootOutput.includes("visible"), true);
+  assertEquals(rootOutput.includes("secret"), false);
+  assertEquals(rootOutput.includes("internal"), false);
+
+  const secretHelp = await invoke(["secret", "--help"]);
+  assertEquals(
+    new TextDecoder().decode(secretHelp.stderr).includes(" • wipe - Wipe data"),
+    true,
+  );
+  const secretRun = await invoke(["secret", "wipe"]);
+  assertEquals(
+    new TextDecoder().decode(secretRun.stdout).trim(),
+    "secret wipe",
+  );
+  const internalRun = await invoke(["internal", "clean"]);
+  assertEquals(
+    new TextDecoder().decode(internalRun.stdout).trim(),
+    "internal clean",
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("groups - insertHelp renders a recursive command tree", async () => {
+  const dir = await Deno.makeTempDir();
+  const file = join(dir, "README.md");
+  await Deno.writeTextFile(file, "# Docs\n");
+  const script = `
+    import { Command, Group, Register, insertHelp } from "${Deno.cwd()}/take.ts";
+    insertHelp("README.md");
+    await Register(
+      Group({ name: "db", description: "Database commands" },
+        Command({
+          name: "migrate",
+          description: "Run migrations",
+          flags: {
+            dryRun: { initial: false, description: "Preview migration" },
+          },
+          run() {},
+        }),
+        Group("seed", Command({
+          name: "run",
+          description: "Seed the database",
+          flags: {},
+          run() {},
+        })),
+      ),
+    );
+  `;
+  const scriptFile = join(dir, "test_script.ts");
+  await Deno.writeTextFile(scriptFile, script);
+  await new Deno.Command("deno", {
+    args: ["run", "--allow-all", scriptFile, "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+
+  const content = await Deno.readTextFile(file);
+  assertEquals(content.includes("- `db` - Database commands"), true);
+  assertEquals(content.includes("  - `migrate` - Run migrations"), true);
+  assertEquals(
+    content.includes("    - `--dry-run` `-d` - Preview migration"),
+    true,
+  );
+  assertEquals(content.includes("  - `seed`"), true);
+  assertEquals(content.includes("    - `run` - Seed the database"), true);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("groups - reject command/group collisions and duplicate groups", async () => {
+  const dir = await Deno.makeTempDir();
+  const collisionScript = `
+    import { Command, Register } from "${Deno.cwd()}/take.ts";
+    const command = (name: string) => Command({
+      name,
+      description: name,
+      flags: {},
+      run() {},
+    });
+    await Register(command("foo"), command("foo bar"));
+  `;
+  const duplicateScript = `
+    import { Command, Group, Register } from "${Deno.cwd()}/take.ts";
+    const command = (name: string) => Command({
+      name,
+      description: name,
+      flags: {},
+      run() {},
+    });
+    await Register(
+      Group("foo", command("bar")),
+      Group("foo", command("baz")),
+    );
+  `;
+
+  for (
+    const [name, script, message] of [
+      [
+        "collision.ts",
+        collisionScript,
+        "command and group share the same name: foo",
+      ],
+      ["duplicate.ts", duplicateScript, "duplicate group name: foo"],
+    ]
+  ) {
+    const scriptFile = join(dir, name);
+    await Deno.writeTextFile(scriptFile, script);
+    const result = await new Deno.Command("deno", {
+      args: ["run", "--allow-all", scriptFile, "--help"],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 1);
+    assertEquals(
+      new TextDecoder().decode(result.stderr).includes(message),
+      true,
+    );
+  }
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("groups - Group exposes normalized string and options forms", () => {
+  const child = Group(
+    "child",
+    Command({
+      name: "leaf",
+      description: "Leaf",
+      flags: {},
+      run() {},
+    }),
+  );
+  const parent = Group(
+    { name: "parent", description: "Parent", hidden: true },
+    child,
+  );
+  assertEquals(child.name, "child");
+  assertEquals(child.kind, "group");
+  assertEquals(child.children.length, 1);
+  assertEquals(parent.name, "parent");
+  assertEquals(parent.description, "Parent");
+  assertEquals(parent.hidden, true);
 });
 
 // --- flag case ---

@@ -87,19 +87,19 @@ export type FlagValues<T extends Flags> = {
  * so `run` receives strongly-typed flag values.
  */
 export type TakeCommand<F extends Flags = Flags> = {
-  /** Command name; whitespace-separated for sub-commands, e.g. `"db migrate"`. */
+  /** Command name; whitespace creates automatic groups, e.g. `"db migrate"`. */
   name: string;
-  /** Internal: `name` split into its sub-command parts (populated by Register). */
+  /** @deprecated Legacy internal field; Register no longer populates it. */
   names?: string[];
   /** One-line description shown in help listings. */
   description: string;
   /** Optional long-form help shown under this command's own `--help`. */
   help?: string;
   /**
-   * When true, the command is omitted from the top-level help listing and from
-   * the {@link insertHelp} markdown, but stays fully runnable and still shows
-   * its own help via an explicit `<command> --help`. Use for internal or
-   * maintenance commands you don't want to advertise.
+   * When true, the command is omitted from help listings and from the
+   * {@link insertHelp} markdown, but stays fully runnable and still shows its
+   * own help via an explicit `<command> --help`. Use for internal or maintenance
+   * commands you don't want to advertise.
    */
   hidden?: boolean;
   /** Flag definitions for this command; use `{}` for none. */
@@ -130,6 +130,27 @@ export type NewCommand<F extends Flags = Flags> = TakeCommand<F> & {
   flagsInitial: FlagValues<F>;
 };
 
+/** Options for a command group. Groups organize commands but do not run. */
+export type GroupOptions = {
+  /** Group name. Whitespace-separated names create nested groups. */
+  name: string;
+  /** One-line description shown in help listings. */
+  description?: string;
+  /** Hide this group and its descendants from generated help. */
+  hidden?: boolean;
+};
+
+/** A command or group accepted by {@link Register} and nested in a group. */
+export type Registrable = NewCommand<any> | NewGroup;
+
+/** A {@link GroupOptions} augmented by {@link Group} with its child entries. */
+export type NewGroup = GroupOptions & {
+  /** Internal discriminator added by {@link Group}. */
+  readonly kind: "group";
+  /** Commands and nested groups belonging to this group. */
+  readonly children: [Registrable, ...Registrable[]];
+};
+
 /** The argument object passed to a command's `run` function. */
 export type CommandInput<F extends Flags> = {
   /** Parsed flag values, typed from the command's flag definitions. */
@@ -152,7 +173,7 @@ export function help(str: string) {
   throw str;
 }
 
-const exit = (...args: any[]) => {
+const exit = (...args: any[]): never => {
   console.error(...args);
   process.exit(1);
 };
@@ -496,20 +517,66 @@ async function loadEnvFile(path: string): Promise<boolean> {
 const MARKER_START = "<!-- take:start -->";
 const MARKER_END = "<!-- take:end -->";
 
-async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
+type RegistryCommand = {
+  kind: "command";
+  name: string;
+  fullName: string;
+  command: NewCommand<any>;
+};
+
+type RegistryGroup = {
+  kind: "group";
+  name: string;
+  fullName: string;
+  description?: string;
+  hidden?: boolean;
+  explicit: boolean;
+  children: Map<string, RegistryNode>;
+};
+
+type RegistryNode = RegistryCommand | RegistryGroup;
+
+function sortedChildren(group: RegistryGroup): RegistryNode[] {
+  return [...group.children.values()].toSorted((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  );
+}
+
+function nodeDescription(node: RegistryNode): string | undefined {
+  return node.kind === "group" ? node.description : node.command.description;
+}
+
+function isVisible(node: RegistryNode, showDebug: boolean): boolean {
+  if (node.kind === "command") {
+    if (node.command.hidden) return false;
+    return node.fullName !== "debug" || showDebug;
+  }
+  if (node.hidden) return false;
+  return sortedChildren(node).some((child) => isVisible(child, showDebug));
+}
+
+async function _writeInsertHelp(root: RegistryGroup): Promise<void> {
   if (!_insertHelpPath) return;
   const path = _insertHelpPath;
-  // Build markdown list with flags as sub-bullets
   const lines: string[] = [];
-  for (const cmd of commands) {
-    if (cmd.name === "debug" || cmd.hidden) continue;
-    const desc = cmd.description ? ` - ${cmd.description}` : "";
-    lines.push(`- \`${cmd.name}\`${desc}`);
-    if (_insertHelpOptions.flags === false) continue;
-    // Add flags as sub-bullets (sorted, matching the CLI --help output, so the
-    // generated markdown is deterministic regardless of flag insertion order)
+
+  const appendNode = (node: RegistryNode, depth: number) => {
+    if (!isVisible(node, false)) return;
+    const indent = "  ".repeat(depth);
+    const description = nodeDescription(node);
+    const desc = description ? ` - ${description}` : "";
+    lines.push(`${indent}- \`${node.name}\`${desc}`);
+
+    if (node.kind === "group") {
+      for (const child of sortedChildren(node)) {
+        appendNode(child, depth + 1);
+      }
+      return;
+    }
+    if (_insertHelpOptions.flags === false) return;
+
     const shorts = new Set<string>();
-    for (const flag of namedFlags(cmd.flags)) {
+    for (const flag of namedFlags(node.command.flags)) {
       const { name } = flag;
       const letter = name[0];
       const shortStr = shorts.has(letter) ? "" : ` \`-${letter}\``;
@@ -522,10 +589,15 @@ async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
       if (flag.initial) parts.push(`default=${flag.initial}`);
       const extras = parts.length ? ` (${parts.join(" ")})` : "";
       lines.push(
-        `  - \`--${name}\`${shortStr}${typeStr} - ${flag.description}${extras}`,
+        `${indent}  - \`--${name}\`${shortStr}${typeStr} - ${flag.description}${extras}`,
       );
     }
+  };
+
+  for (const node of sortedChildren(root)) {
+    appendNode(node, 0);
   }
+
   const content = MARKER_START + "\n" + lines.join("\n") + "\n" + MARKER_END;
   // Read existing file
   let fileContent: string;
@@ -551,66 +623,167 @@ async function _writeInsertHelp(commands: NewCommand<any>[]): Promise<void> {
 }
 
 /**
- * Build the CLI from a set of {@link Command} definitions and run the one named
- * by `process.argv`. Loads a local `.env`, validates commands, generates
- * `--help`, updates any {@link insertHelp} target, then dispatches. Exits the
- * process on help, validation errors, or a command failure.
+ * Build the CLI from {@link Command} and {@link Group} definitions and run the
+ * command named by `process.argv`. Loads a local `.env`, validates and
+ * normalizes the command tree, generates `--help`, updates any
+ * {@link insertHelp} target, then dispatches. Exits the process on help,
+ * validation errors, or a command failure.
  */
-export async function Register(...commands: NewCommand<any>[]) {
+export async function Register(...registrables: Registrable[]): Promise<void> {
   // Load .env by default
   await loadEnvFile(".env");
   // Get script name from argv[1]
   const scriptName = basename(process.argv[1] || "cli");
-  // validate commands
-  if (!Array.isArray(commands)) {
+  if (!Array.isArray(registrables)) {
     exit(`CLI(commands) must be an array`);
   }
-  if (commands.length === 0) {
+  if (registrables.length === 0) {
     exit(`CLI(commands) must have at least 1 command`);
   }
-  const names = new Set();
-  for (const c of commands) {
-    // validate name
-    if (typeof c.name !== "string") {
-      exit(`all CLI(commands) must have a "name"`);
+
+  const root: RegistryGroup = {
+    kind: "group",
+    name: "",
+    fullName: "",
+    explicit: true,
+    children: new Map(),
+  };
+  const commandsByName = new Map<string, RegistryCommand>();
+  const groupsByName = new Map<string, RegistryGroup>([["", root]]);
+
+  const nameParts = (value: unknown): string[] => {
+    if (typeof value !== "string") {
+      exit(`all CLI commands and groups must have a "name"`);
     }
-    // transform name
-    // list out "sub-command" names
-    c.names = c.name.trim().split(/\s+/g);
-    c.name = c.names.join(" "); // tidy name
-    // duplicate check
-    if (names.has(c.name)) {
-      exit(`duplicate command name: ${c.name}`);
+    const normalized = (value as string).trim();
+    if (!normalized) {
+      exit(`CLI command and group names must not be empty`);
     }
-    names.add(c.name);
-    // validate function
-    if (typeof c.run !== "function") {
-      exit(`command "${c.name}" must have a "run" function`);
+    return normalized.split(/\s+/g);
+  };
+
+  const childPath = (parent: RegistryGroup, name: string): string =>
+    parent.fullName ? `${parent.fullName} ${name}` : name;
+
+  const ensureGroup = (
+    parent: RegistryGroup,
+    name: string,
+    explicit: boolean,
+    options?: GroupOptions,
+  ): RegistryGroup => {
+    const fullName = childPath(parent, name);
+    const existing = parent.children.get(name);
+    if (existing) {
+      if (existing.kind === "command") {
+        exit(`command and group share the same name: ${fullName}`);
+      }
+      const group = existing as RegistryGroup;
+      if (explicit && group.explicit) {
+        exit(`duplicate group name: ${fullName}`);
+      }
+      if (explicit) {
+        group.explicit = true;
+        group.description = options?.description;
+        group.hidden = options?.hidden;
+      }
+      return group;
     }
-    // validate flags
-    if (!c.flags) {
-      exit(`command "${c.name}" must have "flags", you can use {}`);
+    const group: RegistryGroup = {
+      kind: "group",
+      name,
+      fullName,
+      description: options?.description,
+      hidden: options?.hidden,
+      explicit,
+      children: new Map(),
+    };
+    parent.children.set(name, group);
+    groupsByName.set(fullName, group);
+    return group;
+  };
+
+  const validateCommand = (command: NewCommand<any>, fullName: string) => {
+    if (typeof command.run !== "function") {
+      exit(`command "${fullName}" must have a "run" function`);
     }
-    if (Array.isArray(c.flags)) {
-      exit(`command "${c.name}" flags must be an object, not an array`);
+    if (!command.flags) {
+      exit(`command "${fullName}" must have "flags", you can use {}`);
+    }
+    if (Array.isArray(command.flags)) {
+      exit(`command "${fullName}" flags must be an object, not an array`);
     }
     const cliFlagNames = new Map<string, string>();
-    for (const [name, flag] of Object.entries(c.flags) as [string, Flag][]) {
+    for (
+      const [name, flag] of Object.entries(command.flags) as [string, Flag][]
+    ) {
       if (!flag.description) {
-        exit(`command "${c.name}" flag "${name}" must have a "description"`);
+        exit(
+          `command "${fullName}" flag "${name}" must have a "description"`,
+        );
       }
       const cliName = flagCase(name);
       const existing = cliFlagNames.get(cliName);
       if (existing !== undefined) {
         exit(
-          `command "${c.name}" flags "${existing}" and "${name}" both map to "--${cliName}"`,
+          `command "${fullName}" flags "${existing}" and "${name}" both map to "--${cliName}"`,
         );
       }
       cliFlagNames.set(cliName, name);
     }
+  };
+
+  const isGroup = (entry: unknown): entry is NewGroup =>
+    typeof entry === "object" && entry !== null &&
+    (entry as NewGroup).kind === "group";
+
+  const add = (parent: RegistryGroup, entry: Registrable): void => {
+    if (typeof entry !== "object" || entry === null) {
+      exit(`all CLI entries must be created with Command or Group`);
+    }
+    const parts = nameParts(entry.name);
+    let destination = parent;
+    for (const part of parts.slice(0, -1)) {
+      destination = ensureGroup(destination, part, false);
+    }
+    const name = parts.at(-1)!;
+
+    if (isGroup(entry)) {
+      if (!Array.isArray(entry.children) || entry.children.length === 0) {
+        exit(
+          `group "${childPath(destination, name)}" must have at least 1 child`,
+        );
+      }
+      const group = ensureGroup(destination, name, true, entry);
+      for (const child of entry.children) {
+        add(group, child);
+      }
+      return;
+    }
+
+    const fullName = childPath(destination, name);
+    const existing = destination.children.get(name);
+    if (existing?.kind === "group") {
+      exit(`command and group share the same name: ${fullName}`);
+    }
+    if (existing) {
+      exit(`duplicate command name: ${fullName}`);
+    }
+    validateCommand(entry, fullName);
+    const command: RegistryCommand = {
+      kind: "command",
+      name,
+      fullName,
+      command: entry,
+    };
+    destination.children.set(name, command);
+    commandsByName.set(fullName, command);
+  };
+
+  for (const entry of registrables) {
+    add(root, entry);
   }
-  commands.sort((a, b) => (a.name < b.name ? -1 : 1));
-  await _writeInsertHelp(commands);
+  await _writeInsertHelp(root);
+
   // helper for joining 2 columns of text
   type Table = { left: string; right: string }[];
   const joinColumns = (table: Table) => {
@@ -623,21 +796,29 @@ export async function Register(...commands: NewCommand<any>[]) {
       })
       .join("\n");
   };
-  // recursive help text builder for the command tree
-  function help(msg?: string) {
-    // build command list
-    const content = joinColumns(
-      commands.filter((cmd) => {
-        if (cmd.hidden) return false;
-        return cmd.name !== "debug" || process.env.DEBUG === "1";
-      }).map((cmd) => ({
-        left: ` • ${cmd.name}`,
-        right: cmd.description ? `- ${cmd.description}` : "",
-      })),
-    );
-    // print result
+  // help text builder for the root or a group
+  function helpForGroup(group: RegistryGroup, msg?: string): never {
+    const table: Table = [];
+    const append = (node: RegistryNode, depth: number) => {
+      if (!isVisible(node, process.env.DEBUG === "1")) return;
+      const description = nodeDescription(node);
+      table.push({
+        left: ` ${"  ".repeat(depth)}• ${node.name}`,
+        right: description ? `- ${description}` : "",
+      });
+      if (group !== root && node.kind === "group") {
+        for (const child of sortedChildren(node)) {
+          append(child, depth + 1);
+        }
+      }
+    };
+    for (const node of sortedChildren(group)) {
+      append(node, 0);
+    }
+    const content = joinColumns(table);
+    const prefix = group.fullName ? ` ${group.fullName}` : "";
     console.error(
-      `\n${scriptName} <command> --help\n\n` + "commands:\n" + content + "\n",
+      `\n${scriptName}${prefix} <command> --help\n\ncommands:\n${content}\n`,
     );
     if (msg) {
       console.error("ERROR:", msg);
@@ -645,8 +826,16 @@ export async function Register(...commands: NewCommand<any>[]) {
     }
     process.exit(msg ? 1 : 0);
   }
+
+  const help = (msg?: string): never => helpForGroup(root, msg);
+
   // help text builder for a given command
-  function helpFor(cmd: TakeCommand, flagSpecs: namedFlags, msg?: string) {
+  function helpForCommand(
+    node: RegistryCommand,
+    flagSpecs: namedFlags,
+    msg?: string,
+  ): never {
+    const cmd = node.command;
     // build flag help
     const shorts = new Set();
     const short = (name: string) => {
@@ -673,7 +862,7 @@ export async function Register(...commands: NewCommand<any>[]) {
     // print result
     console.error(
       `\n${scriptName} ` +
-        cmd.name +
+        node.fullName +
         " <flags>\n\n" +
         "description:\n" +
         cmd.description +
@@ -695,24 +884,43 @@ export async function Register(...commands: NewCommand<any>[]) {
     if (args.length === 0) {
       help();
     }
-    // stage 1, find command, split args into names/rest
-    let match = null;
+    // stage 1, find the longest command path and split off its arguments
+    let match: RegistryCommand | undefined;
     let rest: string[] = [];
-    let names = null;
     for (let i = args.length - 1; i >= 0; i--) {
-      names = args.slice(0, i + 1);
       rest = args.slice(i + 1);
-      const name = names.join(" ");
-      match = commands.find((c) => c.name === name);
+      const name = args.slice(0, i + 1).join(" ");
+      match = commandsByName.get(name);
       if (match) {
         break;
       }
     }
     if (!match) {
+      let group: RegistryGroup | undefined;
+      let groupRest: string[] = [];
+      for (let i = args.length - 1; i >= 0; i--) {
+        const name = args.slice(0, i + 1).join(" ");
+        group = groupsByName.get(name);
+        if (group) {
+          groupRest = args.slice(i + 1);
+          break;
+        }
+      }
+      if (group) {
+        if (
+          groupRest.length === 0 ||
+          (groupRest.length === 1 &&
+            (groupRest[0] === "-h" || groupRest[0] === "--help"))
+        ) {
+          helpForGroup(group);
+        }
+        helpForGroup(group, `no matched command: ${args.join(" ")}`);
+      }
       return help(`no matched command: ${args.join(" ")}`);
     }
+    const command = match.command;
     // convert command flags into a list
-    const flagSpecs = namedFlags(match.flags);
+    const flagSpecs = namedFlags(command.flags);
     // always add --help
     flagSpecs.push({
       key: "help",
@@ -721,7 +929,7 @@ export async function Register(...commands: NewCommand<any>[]) {
       description: "show help",
     });
     // stage 2, init flags, parse rest of args
-    const cmdHelp = helpFor.bind(null, match, flagSpecs);
+    const cmdHelp = helpForCommand.bind(null, match, flagSpecs);
     let nextFlag: namedFlag | null = null;
     // traverse rest arguments, sorting into either flags or cmd-args
     const flagVals: Record<string, any> = {};
@@ -783,18 +991,18 @@ export async function Register(...commands: NewCommand<any>[]) {
     }
     if (recordUsage) {
       const usageFlags = Object.fromEntries(
-        Object.keys(match.flags).map((key) => [key, flagVals[key]]),
+        Object.keys(command.flags).map((key) => [key, flagVals[key]]),
       );
-      await appendUsage(match.name, usageFlags, cmdArgs.length);
+      await appendUsage(match.fullName, usageFlags, cmdArgs.length);
     }
     // exec targets 'run' function
     const t = timer();
     try {
-      await match.run({
-        flags: flagVals as FlagValues<typeof match.flags>,
+      await command.run({
+        flags: flagVals as FlagValues<typeof command.flags>,
         args: cmdArgs,
         cmd: (...args: string[]) => cmd(false, ...args),
-        cmdName: match.name,
+        cmdName: match.fullName,
         help: cmdHelp,
       });
     } catch (err) {
@@ -803,7 +1011,7 @@ export async function Register(...commands: NewCommand<any>[]) {
       }
       throw err;
     }
-    console.error(`${scriptName} "${match.name}" ran in ${t}`);
+    console.error(`${scriptName} "${match.fullName}" ran in ${t}`);
   }
   // "root" command
   // process.argv: [node, script, ...args]
@@ -854,6 +1062,22 @@ export function Command<F extends Flags>(
     flagValues: null as any,
     input: null as any,
     flagsInitial,
+  };
+}
+
+/**
+ * Define a CLI command group. A string is shorthand for `{ name: string }`;
+ * commands and further groups are supplied as the remaining arguments.
+ */
+export function Group(
+  options: string | GroupOptions,
+  ...children: [Registrable, ...Registrable[]]
+): NewGroup {
+  const group = typeof options === "string" ? { name: options } : options;
+  return {
+    ...group,
+    kind: "group",
+    children,
   };
 }
 

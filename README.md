@@ -267,8 +267,9 @@ flags:
 
 ### Generated Command Reference
 
-`insertHelp` writes the visible commands and their flags between
-`<!-- take:start -->` and `<!-- take:end -->` markers in a markdown file:
+`insertHelp` writes the visible command tree and its flags between
+`<!-- take:start -->` and `<!-- take:end -->` markers in a markdown file. Groups
+and nested commands are rendered as nested list items:
 
 ```typescript
 import { insertHelp } from "@jpillora/take";
@@ -307,9 +308,47 @@ Command({
 $ ./dev.ts copy file.txt backup/
 ```
 
-### Subcommands
+### Groups
 
-Use spaces in the name to create nested commands.
+Use `Group` to organize related commands. Its first argument can be a name or an
+options object, followed by one or more commands or nested groups.
+
+```typescript
+import { Command, Group, Register } from "@jpillora/take";
+
+await Register(
+  Group(
+    {
+      name: "db",
+      description: "Database commands",
+    },
+    Command({
+      name: "migrate",
+      description: "Run database migrations",
+      flags: {},
+      run() {
+        console.log("Running migrations...");
+      },
+    }),
+    Command({
+      name: "seed",
+      description: "Seed the database",
+      flags: {},
+      run() {
+        console.log("Seeding database...");
+      },
+    }),
+  ),
+);
+```
+
+The options form also accepts `hidden` to hide the entire group from help
+listings while keeping its commands runnable. Running a group with no child, or
+with `--help`, prints help for that group's complete subtree.
+
+For compact definitions and backwards compatibility, whitespace in a command
+name creates groups automatically. This defines the same command path as a
+`Group("db", ...)` containing `Command({ name: "migrate", ... })`:
 
 ```typescript
 await Register(
@@ -321,18 +360,17 @@ await Register(
       console.log("Running migrations...");
     },
   }),
-  Command({
-    name: "db seed",
-    description: "Seed the database",
-    flags: {},
-    run() {
-      console.log("Seeding database...");
-    },
-  })
 );
 ```
 
+Automatic and explicit groups with the same path are merged, so both forms can
+be mixed. Names with more than one space create deeper groups. A path cannot be
+both a runnable command and a group—for example, `foo` and `foo bar` cannot both
+be registered.
+
 ```bash
+$ ./dev.ts --help       # lists the db group
+$ ./dev.ts db --help    # lists migrate and seed
 $ ./dev.ts db migrate
 $ ./dev.ts db seed
 ```
