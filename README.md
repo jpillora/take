@@ -22,41 +22,64 @@ bun add @jpillora/take
 
 ## Quick Start
 
-1. Write file `dev.ts`
+Run this once from your project's directory:
 
-    ```typescript
-    #!/usr/bin/env -S deno run --allow-env
-    // or execute with bun, or with node
+```bash
+curl -fsSL https://take.jpillora.com/setup.sh | bash
+```
 
-    import { Command, Register } from "@jpillora/take";
+The setup script:
 
-    Register(
-      Command({
-        name: "greet",
-        description: "Say hello",
-        flags: {},
-        run() {
-          console.log("Hello, world!");
-        },
-      })
-    );
-    ```
+- Installs Bun at `~/.local/bin/bun` if it is missing.
+- Creates an executable `dev.ts` that imports `.dev/greet.ts` directly.
+- Creates `.dev/greet.ts` as a working example.
+- Runs `./dev.ts greet`, which prints `dev.ts is setup and working 🎉`.
 
-2. Make it executable  `chmod +x dev.ts`
+Existing `dev.ts` and `.dev/greet.ts` files are preserved. Setup prints each
+action it performs. It requires Bash, curl, and `env -S`; installing Bun also
+requires unzip.
 
-3. Run it:
+```bash
+$ ./dev.ts greet
+dev.ts is setup and working 🎉
 
-    ```
-    ./dev.ts --help
+$ ./dev.ts --help
+```
 
-    dev.ts <command> --help
+The generated shebang points to your local Bun executable, so running `dev.ts`
+doesn't fetch a remote wrapper. Bun auto-installs imported packages such as
+`@jpillora/take` into its shared cache, with no local `node_modules`,
+`package.json`, or lockfile required. Set `BUN_INSTALL_CACHE_DIR` to override
+Bun's default cache at `~/.bun/install/cache`.
 
-    commands:
-     • greet - Say hello
+Add commands as TypeScript files under `.dev`, each exporting a default command:
 
-    ./dev.ts greet
-    Hello, world!
-    ```
+```typescript
+// .dev/build.ts
+import { Command } from "@jpillora/take";
+
+export default Command({
+  name: "build",
+  description: "Build the project",
+  flags: {},
+  run() {
+    console.log("Building...");
+  },
+});
+```
+
+Import and register each command in `dev.ts`:
+
+```typescript
+import { Register } from "@jpillora/take";
+import greet from "./.dev/greet.ts";
+import build from "./.dev/build.ts";
+
+await Register(greet, build);
+```
+
+Then run `./dev.ts build`. Imports resolve relative to `dev.ts`, so it also works
+when called from another directory.
 
 ## Output Streams
 
